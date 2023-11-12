@@ -1,4 +1,4 @@
-# flutter_geofire
+# Geofire
 
 ## Usage
 
