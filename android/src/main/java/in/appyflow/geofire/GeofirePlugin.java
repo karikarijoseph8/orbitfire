@@ -10,9 +10,11 @@ import com.firebase.geofire.GeoLocation;
 import com.firebase.geofire.GeoQuery;
 import com.firebase.geofire.GeoQueryEventListener;
 import com.firebase.geofire.LocationCallback;
+import com.google.firebase.database.DataSnapshot;
 import com.google.firebase.database.DatabaseError;
 import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
+import com.google.firebase.database.ValueEventListener;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -30,7 +32,7 @@ import io.flutter.plugin.common.PluginRegistry.Registrar;
 /**
  * GeofirePlugin
  */
-public class GeofirePlugin implements FlutterPlugin,MethodCallHandler, EventChannel.StreamHandler {
+public class GeofirePlugin implements FlutterPlugin, MethodCallHandler, EventChannel.StreamHandler {
 
     GeoFire geoFire;
     DatabaseReference databaseReference;
@@ -42,7 +44,7 @@ public class GeofirePlugin implements FlutterPlugin,MethodCallHandler, EventChan
      * Plugin registration.
      */
 
-    public static void pluginInit(BinaryMessenger messenger){
+    public static void pluginInit(BinaryMessenger messenger) {
         GeofirePlugin geofirePlugin = new GeofirePlugin();
 
         channel = new MethodChannel(messenger, "geofire");
@@ -72,14 +74,18 @@ public class GeofirePlugin implements FlutterPlugin,MethodCallHandler, EventChan
             } else
                 result.success(false);
         } else if (call.method.equals("setLocation")) {
-
-            geoFire.setLocation(call.argument("id").toString(), new GeoLocation(Double.parseDouble(call.argument("lat").toString()), Double.parseDouble(call.argument("lng").toString())), new GeoFire.CompletionListener() {
+            String serviceType = call.argument("serviceType").toString();
+            final String id = call.argument("id").toString();
+            final HashMap<String, Object> map = new HashMap<>();
+            map.put("serviceType", serviceType);
+            geoFire.setLocation(id, new GeoLocation(Double.parseDouble(call.argument("lat").toString()), Double.parseDouble(call.argument("lng").toString())), new GeoFire.CompletionListener() {
                 @Override
                 public void onComplete(String key, DatabaseError error) {
 
                     if (error != null) {
                         result.success(false);
                     } else {
+                        databaseReference.child(id).updateChildren(map);
                         result.success(true);
                     }
 
@@ -104,26 +110,43 @@ public class GeofirePlugin implements FlutterPlugin,MethodCallHandler, EventChan
 
 
         } else if (call.method.equals("getLocation")) {
-
-            geoFire.getLocation(call.argument("id").toString(), new LocationCallback() {
+            final String id = call.argument("id").toString();
+            geoFire.getLocation(id, new LocationCallback() {
                 @Override
                 public void onLocationResult(String key, GeoLocation location) {
-                    HashMap<String, Object> map = new HashMap<>();
-                    if (location != null) {
+                    final GeoLocation mLocation = location;
+                    final HashMap<String, Object> map = new HashMap<>();
 
+                    if (mLocation != null) {
+                        Log.d("TAG", "onLocationResult: map lat" + location.latitude + " long" + location.longitude);
+                        databaseReference.child(id).addListenerForSingleValueEvent(new ValueEventListener() {
+                            @Override
+                            public void onDataChange(@NonNull DataSnapshot dataSnapshot) {
 
-                        map.put("lat", location.latitude);
-                        map.put("lng", location.longitude);
-                        map.put("error", null);
+                                if (dataSnapshot.exists()) {
+                                    String serviceType = dataSnapshot.child("serviceType").getValue(String.class);
 
+                                    map.put("lat", mLocation.latitude);
+                                    map.put("lng", mLocation.longitude);
+                                    map.put("error", null);
+                                    map.put("serviceType", serviceType);
+                                    Log.d("TAG", "onLocationResult: map serviceType" + serviceType);
+                                } else {
+                                    map.put("error", String.format("There is no location for key in GeoFire"));
+                                }
+                                result.success(map);
+                            }
+
+                            @Override
+                            public void onCancelled(@NonNull DatabaseError databaseError) {
+                                map.put("error", String.format("There is no location for key serviceType in GeoFire"));
+                                result.success(map);
+                            }
+                        });
                     } else {
-
-
                         map.put("error", String.format("There is no location for key %s in GeoFire", key));
-
+                        result.success(map);
                     }
-
-                    result.success(map);
                 }
 
                 @Override
@@ -169,19 +192,38 @@ public class GeofirePlugin implements FlutterPlugin,MethodCallHandler, EventChan
             geoQuery.addGeoQueryEventListener(new GeoQueryEventListener() {
                 @Override
                 public void onKeyEntered(String key, GeoLocation location) {
-
+                    final String mKey = key;
+                    final GeoLocation mLocation = location;
                     if (events != null) {
-                        hashMap.clear();
-                        hashMap.put("callBack", "onKeyEntered");
-                        hashMap.put("key", key);
-                        hashMap.put("latitude", location.latitude);
-                        hashMap.put("longitude", location.longitude);
-                        events.success(hashMap);
+                        databaseReference.child(key).addListenerForSingleValueEvent(new ValueEventListener() {
+                            @Override
+                            public void onDataChange(@NonNull DataSnapshot dataSnapshot) {
+
+                                if (dataSnapshot.exists()) {
+                                    String serviceType = dataSnapshot.child("serviceType").getValue(String.class);
+                                    hashMap.clear();
+                                    hashMap.put("callBack", "onKeyEntered");
+                                    hashMap.put("key", mKey);
+                                    hashMap.put("latitude", mLocation.latitude);
+                                    hashMap.put("longitude", mLocation.longitude);
+                                    hashMap.put("serviceType", serviceType);
+                                    Log.d("TAG", "onLocationResult: map serviceType" + serviceType);
+                                } else {
+                                    hashMap.put("error", String.format("There is no location for key in GeoFire"));
+                                }
+                                events.success(hashMap);
+                            }
+
+                            @Override
+                            public void onCancelled(@NonNull DatabaseError databaseError) {
+                                geoQuery.removeAllListeners();
+                                arrayListKeys.add(mKey);
+                            }
+                        });
                     } else {
                         geoQuery.removeAllListeners();
+                        arrayListKeys.add(key);
                     }
-
-                    arrayListKeys.add(key);
 
                 }
 
@@ -203,16 +245,35 @@ public class GeofirePlugin implements FlutterPlugin,MethodCallHandler, EventChan
 
                 @Override
                 public void onKeyMoved(String key, GeoLocation location) {
-
+                    final String mKey = key;
+                    final GeoLocation mLocation = location;
                     if (events != null) {
                         hashMap.clear();
+                        databaseReference.child(key).addListenerForSingleValueEvent(new ValueEventListener() {
+                            @Override
+                            public void onDataChange(@NonNull DataSnapshot dataSnapshot) {
 
-                        hashMap.put("callBack", "onKeyMoved");
-                        hashMap.put("key", key);
-                        hashMap.put("latitude", location.latitude);
-                        hashMap.put("longitude", location.longitude);
+                                if (dataSnapshot.exists()) {
+                                    String serviceType = dataSnapshot.child("serviceType").getValue(String.class);
+                                    hashMap.clear();
+                                    hashMap.put("callBack", "onKeyMoved");
+                                    hashMap.put("key", mKey);
+                                    hashMap.put("latitude", mLocation.latitude);
+                                    hashMap.put("longitude", mLocation.longitude);
+                                    hashMap.put("serviceType", serviceType);
+                                    Log.d("TAG", "onLocationResult: map serviceType" + serviceType);
+                                } else {
+                                    hashMap.put("error", String.format("There is no location for key in GeoFire"));
+                                }
+                                events.success(hashMap);
+                            }
 
-                        events.success(hashMap);
+                            @Override
+                            public void onCancelled(@NonNull DatabaseError databaseError) {
+                                geoQuery.removeAllListeners();
+                                arrayListKeys.add(mKey);
+                            }
+                        });
                     } else {
                         geoQuery.removeAllListeners();
                     }

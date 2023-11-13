@@ -21,9 +21,9 @@ class Geofire {
   }
 
   static Future<bool?> setLocation(
-      String id, double latitude, double longitude) async {
+      String id, double latitude, double longitude, String serviceType) async {
     final bool? isSet = await _channel.invokeMethod('setLocation',
-        <String, dynamic>{"id": id, "lat": latitude, "lng": longitude});
+        <String, dynamic>{"id": id, "lat": latitude, "lng": longitude, "serviceType": serviceType});
     return isSet;
   }
 
